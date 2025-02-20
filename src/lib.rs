@@ -45,17 +45,9 @@ struct WakerNode {
     waker: Option<Waker>,
 }
 
-impl Drop for WakerNode {
-    fn drop(&mut self) {
-        let ptr = self.next.swap(null_mut(), Ordering::SeqCst);
-        if !ptr.is_null() {
-            unsafe { drop(Box::from_raw(ptr)) };
-        }
-    }
-}
-
 impl WakerQueue {
     #[cfg(feature = "cache-padded")]
+    /// creates a new cache padded WakerQueue.
     pub const fn new() -> Self {
         WakerQueue {
             head: CachePadded::new(AtomicPtr::new(null_mut::<WakerNode>())),
@@ -64,6 +56,7 @@ impl WakerQueue {
     }
 
     #[cfg(not(feature = "cache-padded"))]
+    /// creates a new WakerQueue.
     pub const fn new() -> Self {
         WakerQueue {
             head: AtomicPtr::new(null_mut::<WakerNode>()),
@@ -71,6 +64,9 @@ impl WakerQueue {
         }
     }
 
+    /// appends a waker to the WakerQueue.
+    ///
+    /// this is thread safe.
     pub fn register(&self, waker: Waker) {
         let node = Box::into_raw(Box::new(WakerNode {
             next: AtomicPtr::new(null_mut()),
@@ -82,11 +78,32 @@ impl WakerQueue {
         unsafe {
             match prev_tail.as_mut() {
                 Some(prev) => prev.next.store(node, Ordering::Relaxed),
-                None => self.head.store(node, Ordering::Relaxed),
+                // generally, if tail is null it's implied that head is also null.
+                // however, this might not be true if wake_all is happening simultaneously
+                // so we need a loop here to fix the race condition.
+                //
+                // in theory, this is a rare occurence and should not impact performance
+                None => loop {
+                    if self
+                        .head
+                        .compare_exchange_weak(
+                            null_mut(),
+                            node,
+                            Ordering::Relaxed,
+                            Ordering::Relaxed,
+                        )
+                        .is_ok()
+                    {
+                        break;
+                    }
+                },
             }
         }
     }
 
+    /// wakes all wakers in the WakerQueue and clears it.
+    ///
+    /// this is thread safe.
     pub fn wake_all(&self) {
         let tail = self
             .tail
