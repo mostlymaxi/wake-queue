@@ -73,7 +73,7 @@ impl WakerQueue {
             waker: Some(waker),
         }));
 
-        let prev_tail = self.tail.swap(node, Ordering::Relaxed);
+        let prev_tail = self.tail.swap(node, Ordering::Release);
 
         unsafe {
             match prev_tail.as_mut() {
@@ -123,7 +123,7 @@ impl WakerQueue {
         while head.is_null() {
             head = self
                 .head
-                .swap(null_mut::<WakerNode>().into(), Ordering::Relaxed);
+                .swap(null_mut::<WakerNode>().into(), Ordering::Acquire);
         }
 
         // safety: we know head isn't null from above
@@ -132,7 +132,7 @@ impl WakerQueue {
 
         while head.as_ref() as *const _ != tail {
             head = loop {
-                let next = head.next.load(Ordering::Relaxed);
+                let next = head.next.load(Ordering::Acquire);
 
                 if next.is_null() {
                     std::hint::spin_loop();
