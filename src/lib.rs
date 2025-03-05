@@ -45,6 +45,12 @@ struct WakerNode {
     waker: Option<Waker>,
 }
 
+impl Default for WakerQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WakerQueue {
     #[cfg(feature = "cache-padded")]
     /// creates a new cache padded WakerQueue.
@@ -105,30 +111,27 @@ impl WakerQueue {
     ///
     /// this is thread safe.
     pub fn wake_all(&self) {
-        let tail = self
-            .tail
-            .swap(null_mut::<WakerNode>().into(), Ordering::Relaxed);
+        let tail = self.tail.swap(null_mut::<WakerNode>(), Ordering::Relaxed);
 
         // tail being null implies nothing has been pushed into the queue
         if tail.is_null() {
             return;
         }
 
-        let mut head = self
-            .head
-            .swap(null_mut::<WakerNode>().into(), Ordering::Relaxed);
+        let mut head = self.head.swap(null_mut::<WakerNode>(), Ordering::Relaxed);
 
         // if tail isn't null we are just waiting for a register
         // to finish setting the head
         while head.is_null() {
-            head = self
-                .head
-                .swap(null_mut::<WakerNode>().into(), Ordering::Acquire);
+            head = self.head.swap(null_mut::<WakerNode>(), Ordering::Acquire);
         }
 
         // safety: we know head isn't null from above
         let mut head = unsafe { Box::from_raw(head) };
-        head.waker.take().map(|w| w.wake());
+
+        if let Some(w) = head.waker.take() {
+            w.wake();
+        }
 
         while head.as_ref() as *const _ != tail {
             head = loop {
@@ -142,7 +145,9 @@ impl WakerQueue {
                 break unsafe { Box::from_raw(next) };
             };
 
-            head.waker.take().map(|w| w.wake());
+            if let Some(w) = head.waker.take() {
+                w.wake();
+            }
         }
     }
 }
